@@ -4,6 +4,7 @@ This repository contains a proposed V2 technical design for the `haocn-ops/maila
 
 Documents:
 - `docs/mailagents-v2-technical-design.md`
+- `docs/openapi-v2.yaml`
 
 Source project reviewed:
 - `https://github.com/haocn-ops/mailagents`

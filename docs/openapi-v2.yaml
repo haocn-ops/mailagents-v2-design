@@ -1,0 +1,989 @@
+openapi: 3.1.0
+info:
+  title: Mailagents API V2
+  version: 0.1.0-alpha
+  summary: Proposed V2 public API for the Mailagents control plane
+  description: |
+    This document defines the proposed V2 public API for the Mailagents project.
+
+    V2 introduces explicit mailbox account and mailbox lease resources, first-class
+    outbound send attempts, and message list/detail endpoints aligned with the
+    redesigned async architecture.
+
+servers:
+  - url: https://api.mailagents.net
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Auth
+  - name: Mailbox Leases
+  - name: Mailbox Accounts
+  - name: Messages
+  - name: Send Attempts
+  - name: Webhooks
+  - name: Usage
+  - name: Billing
+
+paths:
+  /v2/auth/siwe/challenge:
+    post:
+      tags: [Auth]
+      summary: Create a SIWE challenge
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SiweChallengeRequest'
+      responses:
+        '200':
+          description: Challenge generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiweChallengeResponse'
+
+  /v2/auth/siwe/verify:
+    post:
+      tags: [Auth]
+      summary: Verify SIWE signature and issue an access token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SiweVerifyRequest'
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthTokenResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v2/mailboxes/leases:
+    post:
+      tags: [Mailbox Leases]
+      summary: Request a mailbox lease
+      description: |
+        Creates a mailbox lease request. The lease may be returned in `pending`
+        state while backend provisioning continues asynchronously.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMailboxLeaseRequest'
+      responses:
+        '202':
+          description: Lease request accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailboxLease'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: No compatible mailbox account is available
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /v2/mailboxes/leases/{lease_id}/release:
+    post:
+      tags: [Mailbox Leases]
+      summary: Release a mailbox lease
+      parameters:
+        - $ref: '#/components/parameters/LeaseId'
+      responses:
+        '202':
+          description: Lease release accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailboxLease'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v2/mailboxes/accounts:
+    get:
+      tags: [Mailbox Accounts]
+      summary: List visible mailbox accounts for the tenant
+      parameters:
+        - in: query
+          name: lease_status
+          schema:
+            type: string
+            enum: [pending, active, releasing, released, expired, frozen]
+        - in: query
+          name: cursor
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Mailbox accounts listed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailboxAccountListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v2/mailboxes/accounts/{account_id}/credentials/reset:
+    post:
+      tags: [Mailbox Accounts]
+      summary: Reset mailbox credentials
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+      responses:
+        '202':
+          description: Credential reset accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailboxCredentialResetResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v2/messages:
+    get:
+      tags: [Messages]
+      summary: List messages
+      parameters:
+        - in: query
+          name: mailbox_account_id
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: mailbox_lease_id
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: since
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: cursor
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Messages listed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v2/messages/{message_id}:
+    get:
+      tags: [Messages]
+      summary: Get a message detail
+      parameters:
+        - $ref: '#/components/parameters/MessageId'
+      responses:
+        '200':
+          description: Message detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v2/messages/send:
+    post:
+      tags: [Messages]
+      summary: Queue an outbound message send attempt
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSendAttemptRequest'
+      responses:
+        '202':
+          description: Send attempt queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendAttempt'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /v2/send-attempts:
+    get:
+      tags: [Send Attempts]
+      summary: List send attempts
+      parameters:
+        - in: query
+          name: mailbox_account_id
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: mailbox_lease_id
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: submission_status
+          schema:
+            type: string
+            enum: [queued, submitting, accepted, failed]
+        - in: query
+          name: cursor
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Send attempts listed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendAttemptListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v2/send-attempts/{send_attempt_id}:
+    get:
+      tags: [Send Attempts]
+      summary: Get a send attempt
+      parameters:
+        - $ref: '#/components/parameters/SendAttemptId'
+      responses:
+        '200':
+          description: Send attempt detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendAttemptDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v2/webhooks:
+    post:
+      tags: [Webhooks]
+      summary: Create a webhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWebhookRequest'
+      responses:
+        '201':
+          description: Webhook created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Webhook'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    get:
+      tags: [Webhooks]
+      summary: List webhooks
+      responses:
+        '200':
+          description: Webhooks listed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v2/webhooks/{webhook_id}/rotate-secret:
+    post:
+      tags: [Webhooks]
+      summary: Rotate a webhook secret
+      parameters:
+        - $ref: '#/components/parameters/WebhookId'
+      responses:
+        '200':
+          description: Webhook secret rotated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookSecretRotationResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v2/usage/summary:
+    get:
+      tags: [Usage]
+      summary: Get tenant usage summary
+      parameters:
+        - in: query
+          name: period
+          required: true
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}$'
+            example: '2026-03'
+      responses:
+        '200':
+          description: Usage summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /v2/billing/invoices:
+    get:
+      tags: [Billing]
+      summary: List tenant invoices
+      parameters:
+        - in: query
+          name: period
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}$'
+      responses:
+        '200':
+          description: Invoices listed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvoiceListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v2/billing/invoices/{invoice_id}:
+    get:
+      tags: [Billing]
+      summary: Get an invoice detail
+      parameters:
+        - $ref: '#/components/parameters/InvoiceId'
+      responses:
+        '200':
+          description: Invoice detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invoice'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    LeaseId:
+      in: path
+      name: lease_id
+      required: true
+      schema:
+        type: string
+        format: uuid
+    AccountId:
+      in: path
+      name: account_id
+      required: true
+      schema:
+        type: string
+        format: uuid
+    MessageId:
+      in: path
+      name: message_id
+      required: true
+      schema:
+        type: string
+        format: uuid
+    SendAttemptId:
+      in: path
+      name: send_attempt_id
+      required: true
+      schema:
+        type: string
+        format: uuid
+    WebhookId:
+      in: path
+      name: webhook_id
+      required: true
+      schema:
+        type: string
+        format: uuid
+    InvoiceId:
+      in: path
+      name: invoice_id
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    Unauthorized:
+      description: Authentication failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Resource access denied
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ValidationError:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        request_id:
+          type: string
+
+    SiweChallengeRequest:
+      type: object
+      required: [wallet_address]
+      properties:
+        wallet_address:
+          type: string
+
+    SiweChallengeResponse:
+      type: object
+      required: [nonce, message]
+      properties:
+        nonce:
+          type: string
+        message:
+          type: string
+
+    SiweVerifyRequest:
+      type: object
+      required: [message, signature]
+      properties:
+        message:
+          type: string
+        signature:
+          type: string
+
+    AuthTokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in, tenant_id, agent_id, did]
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          example: Bearer
+        expires_in:
+          type: integer
+        did:
+          type: string
+        tenant_id:
+          type: string
+          format: uuid
+        agent_id:
+          type: string
+          format: uuid
+
+    CreateMailboxLeaseRequest:
+      type: object
+      required: [agent_id, purpose, ttl_hours]
+      properties:
+        agent_id:
+          type: string
+          format: uuid
+        purpose:
+          type: string
+          minLength: 1
+          maxLength: 200
+        ttl_hours:
+          type: integer
+          minimum: 1
+          maximum: 720
+
+    MailboxLease:
+      type: object
+      required:
+        [lease_id, tenant_id, agent_id, mailbox_account_id, address, lease_status, purpose, ends_at]
+      properties:
+        lease_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        agent_id:
+          type: string
+          format: uuid
+        mailbox_account_id:
+          type: string
+          format: uuid
+        address:
+          type: string
+        lease_status:
+          type: string
+          enum: [pending, active, releasing, released, expired, frozen]
+        purpose:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        ends_at:
+          type: string
+          format: date-time
+        released_at:
+          type: string
+          format: date-time
+
+    MailboxAccount:
+      type: object
+      required: [account_id, address, domain, backend_status, mailbox_type]
+      properties:
+        account_id:
+          type: string
+          format: uuid
+        address:
+          type: string
+        domain:
+          type: string
+        backend_status:
+          type: string
+          enum: [provisioning, active, disabled, error]
+        mailbox_type:
+          type: string
+          enum: [pooled, dedicated]
+        last_password_reset_at:
+          type: string
+          format: date-time
+        active_lease:
+          $ref: '#/components/schemas/MailboxLease'
+
+    MailboxAccountListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/MailboxAccount'
+        next_cursor:
+          type: string
+
+    MailboxCredentialResetResponse:
+      type: object
+      required: [account_id, status]
+      properties:
+        account_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [queued, completed]
+        login:
+          type: string
+        password:
+          type: string
+        webmail_url:
+          type: string
+          format: uri
+
+    MessageSummary:
+      type: object
+      required: [message_id, mailbox_account_id, from_address, subject, received_at, message_status]
+      properties:
+        message_id:
+          type: string
+          format: uuid
+        mailbox_account_id:
+          type: string
+          format: uuid
+        mailbox_lease_id:
+          type: string
+          format: uuid
+        from_address:
+          type: string
+        subject:
+          type: string
+        received_at:
+          type: string
+          format: date-time
+        message_status:
+          type: string
+          enum: [received, parsed, parse_failed, archived]
+        current_parse:
+          $ref: '#/components/schemas/MessageParseResult'
+
+    MessageDetail:
+      allOf:
+        - $ref: '#/components/schemas/MessageSummary'
+        - type: object
+          properties:
+            sender_domain:
+              type: string
+            raw_message_id:
+              type: string
+              format: uuid
+            parse_results:
+              type: array
+              items:
+                $ref: '#/components/schemas/MessageParseResult'
+
+    MessageParseResult:
+      type: object
+      required: [parser_version, parse_status, created_at]
+      properties:
+        parser_version:
+          type: string
+        parse_status:
+          type: string
+          enum: [parsed, failed, partial]
+        otp_code:
+          type: string
+        verification_link:
+          type: string
+          format: uri
+        text_excerpt:
+          type: string
+        confidence:
+          type: number
+        error_code:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    MessageListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/MessageSummary'
+        next_cursor:
+          type: string
+
+    CreateSendAttemptRequest:
+      type: object
+      required: [mailbox_account_id, to, subject]
+      properties:
+        mailbox_account_id:
+          type: string
+          format: uuid
+        mailbox_lease_id:
+          type: string
+          format: uuid
+        to:
+          oneOf:
+            - type: string
+              format: email
+            - type: array
+              items:
+                type: string
+                format: email
+              minItems: 1
+        cc:
+          type: array
+          items:
+            type: string
+            format: email
+        bcc:
+          type: array
+          items:
+            type: string
+            format: email
+        subject:
+          type: string
+          minLength: 1
+          maxLength: 998
+        text:
+          type: string
+        html:
+          type: string
+
+    SendAttempt:
+      type: object
+      required:
+        [send_attempt_id, mailbox_account_id, from_address, subject, submission_status, created_at]
+      properties:
+        send_attempt_id:
+          type: string
+          format: uuid
+        mailbox_account_id:
+          type: string
+          format: uuid
+        mailbox_lease_id:
+          type: string
+          format: uuid
+        from_address:
+          type: string
+        to:
+          type: array
+          items:
+            type: string
+        cc:
+          type: array
+          items:
+            type: string
+        bcc:
+          type: array
+          items:
+            type: string
+        subject:
+          type: string
+        submission_status:
+          type: string
+          enum: [queued, submitting, accepted, failed]
+        backend_queue_id:
+          type: string
+        smtp_response:
+          type: string
+        submitted_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    SendAttemptDetail:
+      allOf:
+        - $ref: '#/components/schemas/SendAttempt'
+        - type: object
+          properties:
+            events:
+              type: array
+              items:
+                $ref: '#/components/schemas/SendAttemptEvent'
+
+    SendAttemptEvent:
+      type: object
+      required: [event_type, created_at]
+      properties:
+        event_type:
+          type: string
+        payload:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+
+    SendAttemptListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SendAttempt'
+        next_cursor:
+          type: string
+
+    CreateWebhookRequest:
+      type: object
+      required: [target_url, event_types, secret]
+      properties:
+        target_url:
+          type: string
+          format: uri
+        event_types:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum: [mail.received, otp.extracted, message.parsed, send.accepted, send.failed]
+        secret:
+          type: string
+          minLength: 16
+
+    Webhook:
+      type: object
+      required: [webhook_id, target_url, event_types, status, created_at]
+      properties:
+        webhook_id:
+          type: string
+          format: uuid
+        target_url:
+          type: string
+          format: uri
+        event_types:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          enum: [active, paused, disabled]
+        created_at:
+          type: string
+          format: date-time
+        last_delivery_at:
+          type: string
+          format: date-time
+        last_status_code:
+          type: integer
+
+    WebhookListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Webhook'
+
+    WebhookSecretRotationResponse:
+      type: object
+      required: [webhook_id, status, secret]
+      properties:
+        webhook_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          example: rotated
+        secret:
+          type: string
+
+    UsageSummary:
+      type: object
+      required: [period, api_calls, active_mailboxes, message_parses, send_attempts, billable_units]
+      properties:
+        period:
+          type: string
+        api_calls:
+          type: number
+        active_mailboxes:
+          type: number
+        message_parses:
+          type: number
+        send_attempts:
+          type: number
+        billable_units:
+          type: number
+
+    Invoice:
+      type: object
+      required: [invoice_id, tenant_id, period_start, period_end, amount_usdc, status]
+      properties:
+        invoice_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        period_start:
+          type: string
+          format: date
+        period_end:
+          type: string
+          format: date
+        amount_usdc:
+          type: number
+        status:
+          type: string
+          enum: [draft, issued, paid, void]
+        statement_hash:
+          type: string
+        settlement_tx_hash:
+          type: string
+        issued_at:
+          type: string
+          format: date-time
+
+    InvoiceListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Invoice'
